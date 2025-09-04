@@ -295,3 +295,157 @@ with tab_perc:
 
 st.markdown("---")
 st.caption("Quadrantes em 0 (linhas tracejadas). Escala de cores: Viridis_r (Δ % AUM). Bases padrão embutidas.")
+
+# =======================
+# ABA 3 — ANÁLISE DESCRITIVA
+# =======================
+import io
+from scipy.stats import spearmanr
+
+def describe_frame(df, cols):
+    out = []
+    for c in cols:
+        s = df[c].astype(float)
+        out.append({
+            "variável": c,
+            "n": int(s.notna().sum()),
+            "faltantes_%": 100 * s.isna().mean(),
+            "média": s.mean(),
+            "desvio": s.std(ddof=1),
+            "min": s.min(),
+            "q1": s.quantile(0.25),
+            "mediana": s.median(),
+            "q3": s.quantile(0.75),
+            "máx": s.max(),
+        })
+    return pd.DataFrame(out)
+
+def fisher_ci(r, n, alpha=0.05):
+    if n <= 3 or not np.isfinite(r) or abs(r) >= 1:
+        return (np.nan, np.nan)
+    z = np.arctanh(r)
+    se = 1.0 / np.sqrt(n - 3)
+    zcrit = norm.ppf(1 - alpha/2.0)
+    return np.tanh(z - zcrit*se), np.tanh(z + zcrit*se)
+
+def corr_table(df, x_var, y_vars, method="pearson"):
+    rows = []
+    for y in y_vars:
+        sub = df[[x_var, y]].dropna().astype(float)
+        n = len(sub)
+        if n < 3:
+            rows.append({"y": y, "n": n, "r/rho": np.nan, "lo95": np.nan,
+                         "hi95": np.nan, "p_value": np.nan, "método": method})
+            continue
+        if method == "pearson":
+            r, p = pearsonr(sub[x_var], sub[y])
+            lo, hi = fisher_ci(r, n)
+            rows.append({"y": y, "n": n, "r/rho": r, "lo95": lo, "hi95": hi,
+                         "p_value": p, "método": "pearson"})
+        else:
+            rho, p = spearmanr(sub[x_var], sub[y])
+            rows.append({"y": y, "n": n, "r/rho": rho, "lo95": np.nan,
+                         "hi95": np.nan, "p_value": p, "método": "spearman"})
+    return pd.DataFrame(rows)
+
+def quadrant_counts(df, x_col, y_col):
+    """Conta pontos por quadrante (linhas em 0)."""
+    d = df[[x_col, y_col]].dropna().astype(float)
+    q1 = ((d[x_col] > 0) & (d[y_col] > 0)).sum()
+    q2 = ((d[x_col] <= 0) & (d[y_col] > 0)).sum()
+    q3 = ((d[x_col] <= 0) & (d[y_col] <= 0)).sum()
+    q4 = ((d[x_col] > 0) & (d[y_col] <= 0)).sum()
+    return pd.DataFrame({"quadrante": ["Q1 (+,+)","Q2 (-,+)","Q3 (-,-)","Q4 (+,-)"],
+                         "contagem": [q1,q2,q3,q4]})
+
+def to_csv_download(df, filename):
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, encoding="utf-8")
+    st.download_button("⬇️ Baixar CSV: " + filename, buf.getvalue(), file_name=filename, mime="text/csv")
+
+tab_desc, = st.tabs(["Análise Descritiva"])
+
+with tab_desc:
+    st.subheader("Análise Descritiva — Calouro")
+    st.caption("Resumo, correlações, quadrantes (para DELTAS) e rankings rápidos.")
+
+    # ---- Escolhas de variáveis
+    st.markdown("##### Configurações")
+    colA, colB = st.columns(2)
+    with colA:
+        x_deltas = "D_CONV"
+        ylist_deltas = ["D_MENOR40","D_REPROV","D_REND100","D_MIX_INAD","D_NAO_AI"]
+        st.write("**DELTAS:** X = `D_CONV` | Y = ", ", ".join(ylist_deltas))
+    with colB:
+        x_perc = "P_CONV"
+        ylist_perc = ["P_MENOR40","P_REPROV","P_REND100","P_MIX_INAD","P_NAO_AI"]
+        st.write("**Percentuais:** X = `P_CONV` | Y = ", ", ".join(ylist_perc))
+
+    st.markdown("---")
+    st.markdown("### 1) Estatísticas descritivas")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**DELTAS (pp)**")
+        desc_deltas = describe_frame(df_deltas, ["D_CONV","D_REND100","D_MENOR40","D_REPROV","D_NAO_AI","D_MIX_INAD","AUM","D_DEV_BOLSA"])
+        st.dataframe(desc_deltas, use_container_width=True)
+        to_csv_download(desc_deltas, "descricao_deltas.csv")
+    with col2:
+        st.markdown("**Percentuais (%)**")
+        desc_perc = describe_frame(df_perc, ["P_CONV","P_REND100","P_MENOR40","P_REPROV","P_NAO_AI","P_MIX_INAD","AUM","D_DEV_BOLSA"])
+        st.dataframe(desc_perc, use_container_width=True)
+        to_csv_download(desc_perc, "descricao_percentuais.csv")
+
+    st.markdown("---")
+    st.markdown("### 2) Correlações")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**DELTAS — Pearson (IC95%) com X = D_CONV**")
+        ct_dp = corr_table(df_deltas, x_var=x_deltas, y_vars=ylist_deltas, method="pearson")
+        st.dataframe(ct_dp, use_container_width=True)
+        to_csv_download(ct_dp, "correlacoes_deltas_pearson.csv")
+    with c2:
+        st.markdown("**DELTAS — Spearman com X = D_CONV**")
+        ct_ds = corr_table(df_deltas, x_var=x_deltas, y_vars=ylist_deltas, method="spearman")
+        st.dataframe(ct_ds, use_container_width=True)
+        to_csv_download(ct_ds, "correlacoes_deltas_spearman.csv")
+
+    c3, c4 = st.columns(2)
+    with c3:
+        st.markdown("**Percentuais — Pearson (IC95%) com X = P_CONV**")
+        ct_pp = corr_table(df_perc, x_var=x_perc, y_vars=ylist_perc, method="pearson")
+        st.dataframe(ct_pp, use_container_width=True)
+        to_csv_download(ct_pp, "correlacoes_percentuais_pearson.csv")
+    with c4:
+        st.markdown("**Percentuais — Spearman com X = P_CONV**")
+        ct_ps = corr_table(df_perc, x_var=x_perc, y_vars=ylist_perc, method="spearman")
+        st.dataframe(ct_ps, use_container_width=True)
+        to_csv_download(ct_ps, "correlacoes_percentuais_spearman.csv")
+
+    st.markdown("---")
+    st.markdown("### 3) Quadrantes (apenas DELTAS, linhas em 0)")
+
+    qcols = st.columns(5)
+    for i, y in enumerate(ylist_deltas):
+        with qcols[i]:
+            st.markdown(f"**{y}**")
+            qc = quadrant_counts(df_deltas, x_col="D_CONV", y_col=y)
+            st.dataframe(qc, hide_index=True, use_container_width=True)
+
+    st.markdown("---")
+    st.markdown("### 4) Rankings rápidos")
+
+    r1, r2 = st.columns(2)
+    with r1:
+        st.markdown("**Top/Bottom por % Conversão (Percentuais)**")
+        rank_conv = df_perc[["MARCA","P_CONV"]].dropna().sort_values("P_CONV", ascending=False).reset_index(drop=True)
+        st.dataframe(rank_conv, use_container_width=True)
+        to_csv_download(rank_conv, "ranking_percentuais_conv.csv")
+    with r2:
+        st.markdown("**Top/Bottom por Δ % Conversão (DELTAS)**")
+        rank_dconv = df_deltas[["MARCA","D_CONV"]].dropna().sort_values("D_CONV", ascending=False).reset_index(drop=True)
+        st.dataframe(rank_dconv, use_container_width=True)
+        to_csv_download(rank_dconv, "ranking_deltas_dconv.csv")
+
+
